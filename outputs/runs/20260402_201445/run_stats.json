@@ -1,0 +1,21 @@
+{
+  "total_target": 3000,
+  "success_count": 3000,
+  "failed_count": 0,
+  "filtered_count": 0,
+  "skipped_count": 0,
+  "resume_skipped_count": 0,
+  "avg_latency_sec": 27.08741,
+  "failure_rate": 0.0,
+  "usage": {
+    "prompt_tokens_sum": 779517,
+    "completion_tokens_sum": 4519705,
+    "total_tokens_sum": 5299222,
+    "usage_missing_ratio": 0.0
+  },
+  "retry_histogram": {
+    "0": 2960,
+    "1": 35,
+    "2": 5
+  }
+}
