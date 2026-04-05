@@ -1,6 +1,7 @@
 {
   "summary": {
     "model": "Qwen/Qwen2.5-3B-Instruct",
+    "lora": "qwen2.5-3B-Orig-Orig",
     "trial_n": 1319,
     "seed": 42,
     "total": 1319,
