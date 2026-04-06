@@ -53,6 +53,7 @@ This folder contains the current evaluation workflow.
 - Existing result JSON files:
   - `benchmark/gsm8k_benchmark_result/gsm8k_qwen3_5_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_qwen2_5_3b_results.json`
+  - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Orig-Quant_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Orig_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Quant_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Orig-Orig_results.json`
@@ -124,6 +125,12 @@ Current metrics from existing benchmark outputs:
 | Teacher | 96.51 |
 | Base Student | 79.61 |
 | SFT Student (Orig-Orig) | 80.21 |
+| SFT Student (Orig-Quant) | 77.48 |
 | SFT Student (Distill-Orig) | 78.62 |
 | SFT Student (Distill-Quant) | 78.70 |
 
+Additional note:
+
+- `Orig-Orig` is currently the best fine-tuned student checkpoint in the repo at `80.21%`.
+- `Orig-Quant` is `77.48%`, which is below the base model on this benchmark.
+- The two distilled student checkpoints are `78.62%` and `78.70%`, both also slightly below the base model on this benchmark.
