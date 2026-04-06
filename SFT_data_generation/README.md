@@ -1,64 +1,64 @@
 # teacher-data-gen
 
-这是一个面向 GSM8K SFT 蒸馏任务的 teacher model 数据生成模块。
+This module generates teacher-model data for GSM8K SFT distillation.
 
-## 功能说明
+## What It Does
 
-- 从 `openai/gsm8k` 的 `main/train` 中读取前3000条样本
-- 只使用 `question` 字段
-- 调用阿里云百炼的 `qwen3.5-397b-a17b`
-- 输出 `success.jsonl`、`bad.jsonl`、`run_stats.json` 和 `run.log`
+- Reads the first 3000 samples from `openai/gsm8k`, split `main/train`
+- Uses only the `question` field
+- Calls Alibaba DashScope model `qwen3.5-397b-a17b`
+- Writes `success.jsonl`, `bad.jsonl`, `run_stats.json`, and `run.log`
 
-## 安装
+## Installation
 
 ```bash
 pip install -e .
 ```
 
-## API Key 配置
+## API Key Configuration
 
-可以直接在config.yaml里填写，或使用环境变量
+You can either set the API key directly in the config file or provide it through an environment variable.
 
 ```bash
-set DASHSCOPE_API_KEY=YOUR_KEY_HERE
+export DASHSCOPE_API_KEY=YOUR_KEY_HERE
 ```
 
-对应配置写法：
+Corresponding config:
 
 ```yaml
 teacher:
   api_key_env: DASHSCOPE_API_KEY
 ```
 
-系统 prompt 单独存放在 `prompts/teacher_system_prompt.txt`，可以通过 `teacher.system_prompt_path` 修改路径。
+The system prompt is stored separately in `prompts/teacher_system_prompt.txt`. You can change its location through `teacher.system_prompt_path`.
 
-## 运行方式
+## Run
 
 ```bash
 python -m teacher_data_gen.main --config configs/teacher_gsm8k.yaml
 ```
 
-## 输出格式
+## Output Format
 
-成功样本会写入 `success.jsonl`，字段包括：
+Successful samples are written to `success.jsonl`. Each record contains:
 
-- `id` //数据集本身无id，手动编号
-- `question` //题干
-- `response.reasoning` //思考过程
-- `response.answer` //答案
-- `response.text` //思考过程+标签化答案
+- `id` // manually assigned because GSM8K does not provide one
+- `question`
+- `response.reasoning`
+- `response.answer`
+- `response.text` // reasoning plus tagged final answer
 - `created_at`
 - `teacher_model`
 - `usage`
 
-其中最终答案始终附在 `response.text` 的末尾：
+The final answer is always appended at the end of `response.text`:
 
 ```text
 <final_answer>...</final_answer>
 ```
 
-过滤样本或失败样本会写入 `bad.jsonl`。
+Filtered samples or failed generations are written to `bad.jsonl`.
 
-## 说明
+## Notes
 
-- 默认不使用qwen3.5-397b-a17b自带的thinking mode，而是直接要求模型直接输出简洁的 `reasoning` 和 `answer` JSON，这样生成的数据更短、更干净，也更容易解析。不然实测会出现一直思考停不下来的情况，同时原始的thinking里会复述system prompt的一些内容
+- By default, this module does not use the built-in thinking mode of `qwen3.5-397b-a17b`. Instead, it asks the model to return concise `reasoning` and `answer` fields in JSON format. This makes the generated data shorter, cleaner, and easier to parse. In practice, using the original thinking mode often leads to excessively long outputs, and parts of the system prompt may be repeated in the reasoning.
