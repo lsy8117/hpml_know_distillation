@@ -8,8 +8,6 @@ This repository already contains the main work from different members in separat
 - `train/`: student SFT training workflow
 - `benchmark/`: teacher / base / student evaluation notebooks and JSON outputs
 
-For the midterm stage, the engineering integration goal is not to rewrite these parts, but to document how they connect and provide a thin orchestration entrypoint.
-
 ## Folder Responsibilities
 
 ### `SFT_data_generation/`
@@ -41,8 +39,6 @@ This folder contains the current student training workflow.
   - LoRA training is handled in the notebook
   - exported checkpoints are referenced in `train/README.md`
 
-At the midterm stage, training is still notebook-based and has not yet been migrated to a standalone CLI script.
-
 ### `benchmark/`
 
 This folder contains the current evaluation workflow.
@@ -57,8 +53,6 @@ This folder contains the current evaluation workflow.
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Orig_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Quant_results.json`
   - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Orig-Orig_results.json`
-
-At the midterm stage, evaluation is also notebook-based.
 
 ## Midterm Pipeline
 
