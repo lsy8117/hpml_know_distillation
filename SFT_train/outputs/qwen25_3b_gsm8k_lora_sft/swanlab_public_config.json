@@ -1,0 +1,13 @@
+{
+  "project_name": "gsm8k-lora-sft",
+  "version": "0.7.15",
+  "run_id": "5cdpqartb266pshbizv45",
+  "swanlog_dir": "/content/LLaMA-Factory/swanlog",
+  "run_dir": "/content/LLaMA-Factory/swanlog/run-20260414_202247-5cdpqartb266pshbizv45",
+  "cloud": {
+    "project_name": "gsm8k-lora-sft",
+    "project_url": "https://swanlab.cn/@jerryjsjsj/gsm8k-lora-sft",
+    "experiment_name": "qwen2.5-3b-gsm8k-lora-sft",
+    "experiment_url": "https://swanlab.cn/@jerryjsjsj/gsm8k-lora-sft/runs/5cdpqartb266pshbizv45"
+  }
+}
