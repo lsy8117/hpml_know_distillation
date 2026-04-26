@@ -40,7 +40,6 @@ class PipelineSmokeTest(unittest.TestCase):
                 "dataset": {"limit": 3},
                 "teacher": {"model": "qwen3.5-397b-a17b", "max_concurrency": 2},
                 "run": {"resume": True},
-                "output": {"final_answer_tag": "final_answer"},
             }
             records = [
                 {"id": "gsm8k_train_00000", "question": "q1"},
@@ -86,10 +85,13 @@ class PipelineSmokeTest(unittest.TestCase):
             stats_disk = json.loads((run_dir / "run_stats.json").read_text(encoding="utf-8"))
 
             self.assertEqual(len(success_rows), 1)
-            self.assertTrue(success_rows[0]["response"]["text"].endswith("<final_answer>1</final_answer>"))
+            self.assertNotIn("text", success_rows[0]["response"])
+            self.assertEqual(success_rows[0]["response"]["reasoning"], "reason one")
+            self.assertEqual(success_rows[0]["response"]["answer"], "1")
             self.assertEqual(len(bad_rows), 2)
             self.assertEqual(stats["success_count"], 1)
             self.assertEqual(stats["filtered_count"], 2)
+            self.assertGreater(stats["avg_teacher_cot_tokens"], 0)
             self.assertGreaterEqual(stats_disk["retry_histogram"]["0"], 1)
             self.assertGreaterEqual(stats_disk["retry_histogram"]["1"], 1)
 
@@ -98,6 +100,50 @@ class PipelineSmokeTest(unittest.TestCase):
             self.assertEqual(stats_second["resume_skipped_count"], 3)
             self.assertEqual(len(read_jsonl(run_dir / "success.jsonl")), 1)
             self.assertEqual(len(read_jsonl(run_dir / "bad.jsonl")), 2)
+
+    def test_pipeline_filters_answer_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "run"
+            logger = logging.getLogger("test_teacher_data_gen_mismatch")
+            logger.handlers.clear()
+            logger.addHandler(logging.NullHandler())
+
+            config = {
+                "dataset": {"limit": 1},
+                "teacher": {"model": "qwen3.5-397b-a17b", "max_concurrency": 1},
+                "run": {"resume": True},
+            }
+            records = [
+                {
+                    "id": "gsm8k_train_00000",
+                    "question": "q1",
+                    "ground_truth_answer": "2",
+                }
+            ]
+            provider = FakeProvider(
+                {
+                    "q1": ProviderResult(
+                        reasoning="reason one",
+                        content='{"reasoning":"reason one","answer":"1"}',
+                        usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                        finish_reason="stop",
+                        latency_sec=1.0,
+                        attempt_count=1,
+                        error=None,
+                    ),
+                }
+            )
+
+            stats = asyncio.run(run_pipeline(config, records, provider, run_dir, logger))
+
+            self.assertFalse((run_dir / "success.jsonl").exists())
+            bad_rows = read_jsonl(run_dir / "bad.jsonl")
+            self.assertEqual(len(bad_rows), 1)
+            self.assertEqual(bad_rows[0]["filter_reason"], "answer_mismatch")
+            self.assertEqual(bad_rows[0]["generated_answer"], "1")
+            self.assertEqual(bad_rows[0]["ground_truth_answer"], "2")
+            self.assertEqual(stats["success_count"], 0)
+            self.assertEqual(stats["filtered_count"], 1)
 
 
 if __name__ == "__main__":

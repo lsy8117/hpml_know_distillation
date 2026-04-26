@@ -1,4 +1,0 @@
-2026-04-02 16:14:45,180 | INFO | Starting run in outputs\runs\20260402_201445
-2026-04-02 16:14:45,181 | INFO | Config summary: dataset_limit=3000 model=qwen3.5-397b-a17b resume=True concurrency=70 use_thinking=False
-2026-04-02 16:14:46,115 | INFO | Resume scan complete. done_ids=0
-2026-04-02 16:41:21,494 | INFO | Run complete. success=3000 failed=0 filtered=0 skipped=0

@@ -2,7 +2,8 @@ dataset:
   name: openai/gsm8k
   config: main
   split: train
-  limit: 3000
+  start_index: 0
+  limit:
 
 teacher:
   model: qwen3.5-397b-a17b
@@ -18,8 +19,5 @@ teacher:
 
 run:
   output_root: outputs/runs
-  run_name:
+  run_name: "20260426_132022"
   resume: true
-
-output:
-  final_answer_tag: final_answer

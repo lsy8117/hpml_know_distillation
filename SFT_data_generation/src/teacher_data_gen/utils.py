@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "name": "openai/gsm8k",
         "config": "main",
         "split": "train",
+        "start_index": 0,
         "limit": 5000,
     },
     "teacher": {
@@ -34,9 +37,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "output_root": "outputs/runs",
         "run_name": None,
         "resume": True,
-    },
-    "output": {
-        "final_answer_tag": "final_answer",
     },
 }
 
@@ -89,7 +89,7 @@ def utc_now_iso() -> str:
 
 def scan_existing_outputs(run_dir: Path) -> tuple[set[str], set[str]]:
     done_ids: set[str] = set()
-    response_texts: set[str] = set()
+    response_keys: set[str] = set()
     success_path = run_dir / "success.jsonl"
     bad_path = run_dir / "bad.jsonl"
 
@@ -109,10 +109,11 @@ def scan_existing_outputs(run_dir: Path) -> tuple[set[str], set[str]]:
                 if record_id:
                     done_ids.add(record_id)
                 response = record.get("response") or {}
-                text = response.get("text")
-                if text:
-                    response_texts.add(text)
-    return done_ids, response_texts
+                reasoning = str(response.get("reasoning") or "").strip()
+                answer = str(response.get("answer") or "").strip()
+                if reasoning or answer:
+                    response_keys.add(make_response_key(reasoning, answer))
+    return done_ids, response_keys
 
 
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:
@@ -137,11 +138,21 @@ def init_stats(total_target: int) -> dict[str, Any]:
             "total_tokens_sum": 0,
             "usage_missing_ratio": 0.0,
         },
+        "teacher_cot_tokens_sum": 0,
+        "teacher_cot_tokens_count": 0,
+        "avg_teacher_cot_tokens": 0.0,
         "retry_histogram": {},
     }
 
 
-def update_stats(stats: dict[str, Any], record_type: str, latency_sec: float, usage: dict[str, int] | None, attempt_count: int) -> None:
+def update_stats(
+    stats: dict[str, Any],
+    record_type: str,
+    latency_sec: float,
+    usage: dict[str, int] | None,
+    attempt_count: int,
+    teacher_cot_tokens: int | None = None,
+) -> None:
     is_processed = record_type in {"success", "failed", "filtered"}
     if record_type == "success":
         stats["success_count"] += 1
@@ -170,6 +181,14 @@ def update_stats(stats: dict[str, Any], record_type: str, latency_sec: float, us
         stats.setdefault("_retry_counter", Counter())
         stats["_retry_counter"][str(retry_count)] += 1
 
+    if record_type == "success" and teacher_cot_tokens is not None:
+        stats["teacher_cot_tokens_sum"] += teacher_cot_tokens
+        stats["teacher_cot_tokens_count"] += 1
+        stats["avg_teacher_cot_tokens"] = round(
+            stats["teacher_cot_tokens_sum"] / stats["teacher_cot_tokens_count"],
+            6,
+        )
+
     denominator = processed if processed > 0 else 1
     stats["failure_rate"] = round(stats["failed_count"] / denominator, 6)
     missing_usage = stats.get("_usage_missing_count", 0)
@@ -197,7 +216,6 @@ def build_success_record(
     question: str,
     reasoning: str,
     answer: str,
-    response_text: str,
     teacher_model: str,
     usage: dict[str, int] | None,
 ) -> dict[str, Any]:
@@ -207,7 +225,6 @@ def build_success_record(
         "response": {
             "reasoning": reasoning,
             "answer": answer,
-            "text": response_text,
         },
         "created_at": utc_now_iso(),
         "teacher_model": teacher_model,
@@ -224,6 +241,8 @@ def build_bad_record(
     usage: dict[str, int] | None,
     finish_reason: str | None = None,
     content_preview: str | None = None,
+    generated_answer: str | None = None,
+    ground_truth_answer: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": record_id,
@@ -235,16 +254,62 @@ def build_bad_record(
         "usage": usage,
         "finish_reason": finish_reason,
         "content_preview": content_preview,
+        "generated_answer": generated_answer,
+        "ground_truth_answer": ground_truth_answer,
     }
 
 
-def classify_output(reasoning: str, answer: str, finish_reason: str | None, response_text: str, seen_texts: set[str]) -> str | None:
+def classify_output(reasoning: str, answer: str, finish_reason: str | None, response_key: str, seen_response_keys: set[str]) -> str | None:
     if not reasoning.strip():
         return "empty_reasoning"
     if not answer.strip():
         return "empty_answer"
     if finish_reason == "length":
         return "truncated"
-    if response_text in seen_texts:
+    if response_key in seen_response_keys:
         return "duplicate_response"
     return None
+
+
+def make_response_key(reasoning: str, answer: str) -> str:
+    return f"{reasoning.strip()}\n{answer.strip()}"
+
+
+def extract_gsm8k_final_answer(answer_text: str) -> str:
+    marker = "####"
+    if marker not in answer_text:
+        raise ValueError("GSM8K answer is missing final-answer marker")
+    return answer_text.rsplit(marker, 1)[1].strip()
+
+
+def answers_match(generated_answer: str, ground_truth_answer: str) -> bool:
+    generated = _normalize_answer(generated_answer)
+    ground_truth = _normalize_answer(ground_truth_answer)
+    if generated == ground_truth:
+        return True
+    generated_decimal = _to_decimal(generated)
+    ground_truth_decimal = _to_decimal(ground_truth)
+    return (
+        generated_decimal is not None
+        and ground_truth_decimal is not None
+        and generated_decimal == ground_truth_decimal
+    )
+
+
+def count_teacher_cot_tokens(reasoning: str) -> int:
+    return len(re.findall(r"\d+\.\d+|\w+|[^\w\s]", reasoning, flags=re.UNICODE))
+
+
+def _normalize_answer(answer: str) -> str:
+    normalized = answer.strip()
+    normalized = normalized.removeprefix("$").strip()
+    normalized = normalized.removesuffix(".").strip()
+    normalized = normalized.replace(",", "")
+    return normalized
+
+
+def _to_decimal(answer: str) -> Decimal | None:
+    try:
+        return Decimal(answer)
+    except InvalidOperation:
+        return None

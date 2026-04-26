@@ -203,9 +203,8 @@ def _is_fatal_error(error: dict[str, Any]) -> bool:
     return status in {401, 403}
 
 
-def build_response_text(reasoning: str, answer: str, final_answer_tag: str) -> str:
-    answer_xml = f"<{final_answer_tag}>{answer}</{final_answer_tag}>"
-    return f"{reasoning.strip()}\n\n{answer_xml}"
+def build_response_text(reasoning: str, answer: str) -> str:
+    return f"{reasoning.strip()}\n\nThe answer is {answer}."
 
 
 def parse_response_json(content: str) -> tuple[str, str]:
