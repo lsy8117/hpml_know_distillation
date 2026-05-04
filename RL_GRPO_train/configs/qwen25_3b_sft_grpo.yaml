@@ -78,3 +78,4 @@ grpo:
   run_name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_improved
   use_vllm: true
   vllm_mode: colocate
+  loss_type: grpo
