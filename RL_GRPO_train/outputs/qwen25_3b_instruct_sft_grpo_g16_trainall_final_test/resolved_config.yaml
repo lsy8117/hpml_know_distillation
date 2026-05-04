@@ -1,41 +1,37 @@
 run:
-  name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_train{train_dataset.limit}
+  name: qwen25_3b_instruct_sft_grpo_g16_trainall_final_test
   output_root: RL_GRPO_train/outputs
-
+  resolved_name: qwen25_3b_instruct_sft_grpo_g16_trainall_final_test
 model:
   base_model_name_or_path: Qwen/Qwen2.5-3B-Instruct
-  adapter_path: SFT_train/outputs/qwen25_3b_gsm8k_lora_sft_full
+  adapter_path: /content/drive/MyDrive/HPML_project/RL_GRPO_train/outputs/qwen25_3b_instruct_sft_grpo_g16_trainall/final_adapter
   tokenizer_name_or_path: Qwen/Qwen2.5-3B-Instruct
   trust_remote_code: true
   prompt_template: qwen_chat
-  system_prompt: ""
+  system_prompt: ''
   include_empty_system: false
   dtype: bf16
-  device_map:
+  device_map: null
   load_in_4bit: false
   is_trainable_adapter: true
-
 train_dataset:
   kind: sft_train
   name: openai/gsm8k
   config: main
   path: SFT_train/data/gsm8k_sft_train.json
-  limit:
-
+  limit: null
 eval_dataset:
   kind: sft_val
   name: openai/gsm8k
   config: main
   path: SFT_train/data/gsm8k_sft_val.json
   limit: 725
-
 final_eval_dataset:
   kind: gsm8k_test
   name: openai/gsm8k
   config: main
   start_index: 0
-  limit:
-
+  limit: null
 reward:
   answer_correct: 1.0
   answer_incorrect: 0.0
@@ -44,14 +40,12 @@ reward:
   length_penalty: -0.1
   min_completion_tokens: 20
   max_completion_tokens: 130
-
 eval:
   every_steps: 20
-  batch_size: 370
+  batch_size: 512
   max_prompt_length: 512
   max_new_tokens: 256
   metric_for_best: exact_match
-
 grpo:
   per_device_train_batch_size: 32
   num_generations: 16
@@ -59,7 +53,7 @@ grpo:
   gradient_accumulation_steps: 2
   temperature: 1.0
   top_p: 0.95
-  learning_rate: 2.0e-6
+  learning_rate: 2.0e-06
   lr_scheduler_type: cosine
   max_prompt_length: 512
   max_completion_length: 256
@@ -69,12 +63,12 @@ grpo:
   max_grad_norm: 1.0
   beta: 0.001
   logging_steps: 3
-  save_strategy: "no"
-  eval_strategy: "no"
+  save_strategy: 'no'
+  eval_strategy: 'no'
   remove_unused_columns: false
   gradient_checkpointing: true
   bf16: true
-  report_to: "swanlab"
-  run_name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_improved
+  report_to: swanlab
+  run_name: qwen25_3b_instruct_sft_grpo_g16_improved
   use_vllm: true
   vllm_mode: colocate

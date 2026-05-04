@@ -1,10 +1,11 @@
 from __future__ import annotations
-
+import torch
 import argparse
 import inspect
 import json
 import shutil
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,47 @@ from rl_common.data import build_trl_dataset, load_examples
 from rl_common.eval import run_greedy_eval
 from rl_common.model import load_policy_model, load_tokenizer, save_adapter_or_model
 from rl_common.rewards import make_answer_reward_func, make_format_reward_func, make_penalty_reward_func
+
+
+CORE_GRPO_LOG_KEYS = {
+    "loss",
+    "grad_norm",
+    "learning_rate",
+    "epoch",
+    "reward",
+    "reward_std",
+    "frac_reward_zero_std",
+    "rewards/answer_reward/mean",
+    "rewards/answer_reward/std",
+    "rewards/format_reward/mean",
+    "rewards/penalty_reward/mean",
+    "answer_exact_match",
+    "format_exact_rate",
+    "parse_fail_rate",
+    "length_penalty_rate",
+    "completions/mean_length",
+    "completions/clipped_ratio",
+    "entropy",
+    "kl",
+    "clip_ratio/region_mean",
+    "sampling/sampling_logp_difference/mean",
+    "sampling/importance_sampling_ratio/mean",
+}
+
+CORE_SFT_VAL_LOG_KEYS = {
+    "exact_match",
+    "reward_mean",
+    "reward_std",
+    "parse_success_rate",
+    "format_exact_rate",
+    "length_penalty_rate",
+    "avg_output_tokens",
+    "avg_output_tokens_correct",
+    "avg_output_tokens_wrong",
+    "best_metric",
+    "best_exact_match",
+    "best_step",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,8 +120,6 @@ class GreedyEvalAndBestSaveCallback(TrainerCallback):
         )
         summary = result["summary"]
         summary["step"] = step
-        _write_json(self.run_dir / "latest_eval_results.json", result)
-        _try_swanlab_log(summary, step)
 
         metric = float(summary[self.metric_for_best])
         if self.best_metric is None or metric > self.best_metric:
@@ -89,7 +129,16 @@ class GreedyEvalAndBestSaveCallback(TrainerCallback):
             if final_adapter.exists():
                 shutil.rmtree(final_adapter)
             save_adapter_or_model(model, final_adapter)
+            summary["best_metric"] = self.best_metric
+            summary[f"best_{self.metric_for_best}"] = self.best_metric
+            summary["best_step"] = self.best_step
             _write_json(self.run_dir / "best_eval_results.json", result)
+        else:
+            summary["best_metric"] = self.best_metric
+            summary[f"best_{self.metric_for_best}"] = self.best_metric
+            summary["best_step"] = self.best_step
+        _write_json(self.run_dir / "latest_eval_results.json", result)
+        _try_swanlab_log(summary, step)
         return result
 
 
@@ -118,6 +167,9 @@ def main() -> None:
     model = load_policy_model(model_cfg, is_trainable_adapter=not args.eval_only)
 
     if args.eval_only:
+        if not model_cfg.get("device_map") and torch.cuda.is_available():
+          model.to("cuda")
+        print(f"eval device = {next(model.parameters()).device}")
         dataset_cfg = config["final_eval_dataset"] if args.final_test else config["eval_dataset"]
         examples = load_examples(dataset_cfg)
         result = run_greedy_eval(model, tokenizer, examples, prompt_cfg, {**config["eval"], "reward": reward_cfg})
@@ -127,6 +179,8 @@ def main() -> None:
         return
 
     from trl import GRPOConfig, GRPOTrainer
+
+    CompactGRPOTrainer = _make_compact_grpo_trainer_class(GRPOTrainer)
 
     train_examples = load_examples(config["train_dataset"])
     eval_examples = load_examples(config["eval_dataset"])
@@ -155,7 +209,7 @@ def main() -> None:
         run_dir=run_dir,
     )
 
-    trainer = GRPOTrainer(
+    trainer = CompactGRPOTrainer(
         model=model,
         args=grpo_args,
         reward_funcs=reward_funcs,
@@ -193,11 +247,45 @@ def _build_grpo_config(grpo_config_cls: Any, raw_cfg: dict[str, Any], run_dir: P
     return grpo_config_cls(**cfg)
 
 
+def _make_compact_grpo_trainer_class(base_cls: Any):
+    class CompactGRPOTrainer(base_cls):
+        def log(self, logs: dict[str, float], *args, **kwargs):
+            mode = "train" if self.model.training else "eval"
+            if hasattr(self, "_metrics") and mode in self._metrics:
+                self._metrics[mode] = defaultdict(
+                    list,
+                    {
+                        key: value
+                        for key, value in self._metrics[mode].items()
+                        if _is_core_grpo_log_key(key)
+                    },
+                )
+            return super().log(_compact_grpo_logs(logs), *args, **kwargs)
+
+    return CompactGRPOTrainer
+
+
+def _compact_grpo_logs(logs: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in logs.items() if _is_core_grpo_log_key(key)}
+
+
+def _is_core_grpo_log_key(key: str) -> bool:
+    normalized = key.replace("reward/", "rewards/", 1)
+    return normalized in CORE_GRPO_LOG_KEYS
+
+
 def _try_swanlab_log(summary: dict[str, Any], step: int) -> None:
     try:
         import swanlab
 
-        swanlab.log({f"sft_val/{key}": value for key, value in summary.items() if isinstance(value, (int, float))}, step=step)
+        swanlab.log(
+            {
+                f"sft_val/{key}": value
+                for key, value in summary.items()
+                if key in CORE_SFT_VAL_LOG_KEYS and isinstance(value, (int, float))
+            },
+            step=step,
+        )
     except Exception:
         return
 
