@@ -5,19 +5,24 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from collections import Counter
 
 from datasets import load_dataset
 
-from .provider import FatalProviderError, TeacherProvider, build_response_text, parse_response_json
+from .provider import FatalProviderError, TeacherProvider, parse_response_json
 from .utils import (
+    answers_match,
     append_jsonl,
     build_bad_record,
     build_success_record,
     classify_output,
+    count_teacher_cot_tokens,
     compute_run_dir,
+    extract_gsm8k_final_answer,
     init_stats,
     load_config,
     make_example_id,
+    make_response_key,
     scan_existing_outputs,
     setup_logger,
     update_stats,
@@ -38,11 +43,24 @@ def load_records(config: dict[str, Any]) -> list[dict[str, Any]]:
         dataset_cfg["config"],
         split=dataset_cfg["split"],
     )
-    limit = int(dataset_cfg["limit"])
+    start_index = int(dataset_cfg.get("start_index") or 0)
+    if start_index < 0:
+        raise ValueError("dataset.start_index must be non-negative")
+    limit_value = dataset_cfg.get("limit")
+    end_index = len(dataset) if limit_value is None else min(start_index + int(limit_value), len(dataset))
+    if start_index > len(dataset):
+        raise ValueError(f"dataset.start_index={start_index} is beyond dataset size {len(dataset)}")
+
     records: list[dict[str, Any]] = []
-    for idx in range(min(limit, len(dataset))):
+    for idx in range(start_index, end_index):
         row = dataset[idx]
-        records.append({"id": make_example_id(idx), "question": row["question"]})
+        records.append(
+            {
+                "id": make_example_id(idx),
+                "question": row["question"],
+                "ground_truth_answer": extract_gsm8k_final_answer(row["answer"]),
+            }
+        )
     return records
 
 
@@ -53,16 +71,15 @@ async def run_pipeline(config: dict[str, Any], records: list[dict[str, Any]], pr
     stats_path = run_dir / "run_stats.json"
 
     if config["run"]["resume"]:
-        done_ids, seen_texts = scan_existing_outputs(run_dir)
+        done_ids, seen_response_keys = scan_existing_outputs(run_dir)
     else:
-        done_ids, seen_texts = set(), set()
+        done_ids, seen_response_keys = set(), set()
     logger.info("Resume scan complete. done_ids=%s", len(done_ids))
 
-    total_target = min(int(config["dataset"]["limit"]), len(records))
-    stats = init_stats(total_target)
+    total_target = len(records)
+    stats = _load_resume_stats(run_dir, total_target) if config["run"]["resume"] else init_stats(total_target)
     stats["resume_skipped_count"] = 0
     teacher_model = config["teacher"]["model"]
-    final_answer_tag = config["output"]["final_answer_tag"]
     max_concurrency = int(config["teacher"]["max_concurrency"])
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -76,7 +93,6 @@ async def run_pipeline(config: dict[str, Any], records: list[dict[str, Any]], pr
     for item in records[:total_target]:
         if item["id"] in done_ids:
             stats["resume_skipped_count"] += 1
-            update_stats(stats, "skipped", 0.0, None, 1)
             continue
         tasks.append(asyncio.create_task(process_one(item)))
 
@@ -167,8 +183,8 @@ async def run_pipeline(config: dict[str, Any], records: list[dict[str, Any]], pr
             continue
 
         final_reasoning = parsed_reasoning or result.reasoning
-        response_text = build_response_text(final_reasoning, answer, final_answer_tag)
-        filter_reason = classify_output(final_reasoning, answer, result.finish_reason, response_text, seen_texts)
+        response_key = make_response_key(final_reasoning, answer)
+        filter_reason = classify_output(final_reasoning, answer, result.finish_reason, response_key, seen_response_keys)
         if filter_reason is not None:
             bad_record = build_bad_record(
                 record_id=record_id,
@@ -186,19 +202,39 @@ async def run_pipeline(config: dict[str, Any], records: list[dict[str, Any]], pr
             write_stats(stats_path, stats)
             continue
 
+        ground_truth_answer = item.get("ground_truth_answer")
+        if ground_truth_answer is not None and not answers_match(answer, ground_truth_answer):
+            bad_record = build_bad_record(
+                record_id=record_id,
+                question=item["question"],
+                teacher_model=teacher_model,
+                error=None,
+                filter_reason="answer_mismatch",
+                usage=usage,
+                finish_reason=result.finish_reason,
+                generated_answer=answer,
+                ground_truth_answer=ground_truth_answer,
+            )
+            append_jsonl(bad_path, bad_record)
+            written_ids.add(record_id)
+            update_stats(stats, "filtered", result.latency_sec, usage, result.attempt_count)
+            write_stats(stats_path, stats)
+            continue
+
+        teacher_cot_tokens = count_teacher_cot_tokens(final_reasoning)
+
         success_record = build_success_record(
             record_id=record_id,
             question=item["question"],
             reasoning=final_reasoning,
             answer=answer,
-            response_text=response_text,
             teacher_model=teacher_model,
             usage=usage,
         )
         append_jsonl(success_path, success_record)
-        seen_texts.add(response_text)
+        seen_response_keys.add(response_key)
         written_ids.add(record_id)
-        update_stats(stats, "success", result.latency_sec, usage, result.attempt_count)
+        update_stats(stats, "success", result.latency_sec, usage, result.attempt_count, teacher_cot_tokens)
         write_stats(stats_path, stats)
 
     if fatal_error:
@@ -214,14 +250,38 @@ async def run_pipeline(config: dict[str, Any], records: list[dict[str, Any]], pr
     return stats
 
 
+def _load_resume_stats(run_dir: Path, total_target: int) -> dict[str, Any]:
+    stats = init_stats(total_target)
+    for path in (run_dir / "success.jsonl", run_dir / "bad.jsonl"):
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                usage = record.get("usage")
+                if path.name == "success.jsonl":
+                    reasoning = str((record.get("response") or {}).get("reasoning") or "")
+                    update_stats(stats, "success", 0.0, usage, 1, count_teacher_cot_tokens(reasoning))
+                elif record.get("filter_reason") == "api_failed":
+                    update_stats(stats, "failed", 0.0, usage, 1)
+                else:
+                    update_stats(stats, "filtered", 0.0, usage, 1)
+    stats["total_target"] = total_target
+    stats["_retry_counter"] = Counter({str(k): int(v) for k, v in stats.get("retry_histogram", {}).items()})
+    return stats
+
+
 async def async_main(config_path: str) -> dict[str, Any]:
     config = load_config(config_path)
     run_dir = compute_run_dir(config)
     run_dir.mkdir(parents=True, exist_ok=True)
     logger = setup_logger(run_dir)
     logger.info("Starting run in %s", run_dir)
-    logger.info("Config summary: dataset_limit=%s model=%s resume=%s concurrency=%s use_thinking=%s",
-                config["dataset"]["limit"],
+    logger.info("Config summary: dataset_start_index=%s dataset_limit=%s model=%s resume=%s concurrency=%s use_thinking=%s",
+                config["dataset"].get("start_index", 0),
+                config["dataset"].get("limit"),
                 config["teacher"]["model"],
                 config["run"]["resume"],
                 config["teacher"]["max_concurrency"],

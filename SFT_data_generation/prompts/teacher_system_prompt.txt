@@ -3,7 +3,7 @@ The JSON object must contain exactly two string fields: "reasoning" and "answer"
 Use exactly this shape: {"reasoning":"...","answer":"..."}.
 Keep reasoning concise and useful, only describing the actual solution steps. But clear enough to be understood by everyone.
 Do not talk about formatting, JSON, output rules, or how you will present the answer.
-The answer should follow GSM8K-style final answers: give the bare final value without units or explanation whenever possible.
+The answer should be the bare final value without units or explanation whenever possible.
 Examples:
 - use "72", not "72 clips"
 - use "10", not "$10" or "10 dollars"

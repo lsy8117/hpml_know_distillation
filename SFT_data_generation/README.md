@@ -4,9 +4,10 @@ This module generates teacher-model data for GSM8K SFT distillation.
 
 ## What It Does
 
-- Reads the first 3000 samples from `openai/gsm8k`, split `main/train`
+- Reads a configurable slice from `openai/gsm8k`, split `main/train`
 - Uses only the `question` field
 - Calls Alibaba DashScope model `qwen3.5-397b-a17b`
+- Filters generations whose final answer does not match the GSM8K official answer
 - Writes `success.jsonl`, `bad.jsonl`, `run_stats.json`, and `run.log`
 
 ## Installation
@@ -46,18 +47,14 @@ Successful samples are written to `success.jsonl`. Each record contains:
 - `question`
 - `response.reasoning`
 - `response.answer`
-- `response.text` // reasoning plus tagged final answer
 - `created_at`
 - `teacher_model`
 - `usage`
 
-The final answer is always appended at the end of `response.text`:
-
-```text
-<final_answer>...</final_answer>
-```
-
 Filtered samples or failed generations are written to `bad.jsonl`.
+Answer mismatches are filtered with `filter_reason: "answer_mismatch"` and are not included in `success.jsonl`.
+
+`run_stats.json` includes `avg_teacher_cot_tokens`, computed from successful `response.reasoning` fields.
 
 ## Notes
 
