@@ -1,104 +1,127 @@
 # hpml_know_distillation
 
-## Current Midterm Integration Status
+This repository contains the HPML project on GSM8K mathematical reasoning post-training. The project now covers the full path from teacher data generation to SFT and RL post-training.
 
-This repository already contains the main work from different members in separate folders:
+## Repository Map
 
-- `SFT_data_generation/`: teacher-side GSM8K data generation
-- `train/`: student SFT training workflow
-- `benchmark/`: teacher / base / student evaluation notebooks and JSON outputs
+- `SFT_data_generation/`: teacher-side GSM8K data generation with DashScope / OpenAI-compatible API.
+- `train/`: original notebook-based SFT experiments for the midterm checkpoint.
+- `SFT_train/`: LLaMA-Factory SFT workflow, full filtered SFT dataset, validation outputs, and LoRA adapter artifacts.
+- `RL_common/`: shared answer parsing, prompt building, data loading, reward, model loading, and evaluation utilities for RL stages.
+- `RL_dryrun_rollout/`: pre-RL rollout diagnostics to check reward variance before GRPO-style training.
+- `RL_GRPO_train/`: GRPO, GSPO, and DAPO training/evaluation configs, scripts, and result artifacts.
+- `GRPO_profile/`: GRPO profiling utilities and sample profiling outputs.
+- `SFT_profile/`: SFT profiling notebooks and related artifacts.
+- `benchmark/`: earlier benchmark notebooks and benchmarking environment notes.
+- `results/`: summarized result tables.
 
-## Folder Responsibilities
+## Current Pipeline
 
-### `SFT_data_generation/`
+```text
+teacher_gen
+  -> build_full_sft_dataset
+  -> train_sft_full
+  -> rl_dryrun_rollout
+  -> train_grpo/gspo/dapo
+  -> eval_validation_and_gsm8k_test
+  -> profile_and_summarize
+```
 
-This folder contains the teacher data generation module.
+The midterm pipeline and artifacts are still kept for comparison. The newer full-data pipeline uses filtered teacher generations from `SFT_data_generation/outputs/runs/20260426_132022`.
 
-- Entry config: `SFT_data_generation/configs/teacher_gsm8k.yaml`
-- Main command:
+## Teacher Data Generation
+
+Teacher generation reads GSM8K train questions and asks `qwen3.5-397b-a17b` to return structured `reasoning` and `answer` fields. The newer generation pass:
+
+- targets the full GSM8K train split,
+- filters teacher answers that mismatch official GSM8K answers,
+- records teacher CoT token statistics,
+- writes successful samples to `success.jsonl` and filtered samples to `bad.jsonl`.
+
+Run:
 
 ```bash
 cd SFT_data_generation
 export PYTHONPATH="$PWD/src:$PYTHONPATH"
+export DASHSCOPE_API_KEY=YOUR_KEY
 python -m teacher_data_gen.main --config configs/teacher_gsm8k.yaml
 ```
 
-- Output example:
-  - `outputs/runs/20260402_201445/success.jsonl`
-  - `outputs/runs/20260402_201445/run_stats.json`
+Current full-data run summary:
 
-Note: API key is now expected from the environment variable `DASHSCOPE_API_KEY`.
+- target examples: `7473`
+- successful examples: `7256`
+- filtered answer mismatches / bad outputs: `217`
+- average teacher CoT tokens: `61.35`
 
-### `train/`
+## SFT
 
-This folder contains the current student training workflow.
+`SFT_train/` contains the LLaMA-Factory full SFT setup.
 
-- Main file: `train/train.ipynb`
-- Current status:
-  - data formatting and train/val split logic are handled in the notebook
-  - LoRA training is handled in the notebook
-  - exported checkpoints are referenced in `train/README.md`
+- base model: `Qwen/Qwen2.5-3B-Instruct`
+- dataset size: `7256`
+- train / val split: `6531 / 725`
+- LoRA rank / alpha / dropout: `32 / 64 / 0.05`
+- epochs: `4`
+- learning rate: `2e-5`
+- output adapter: `SFT_train/outputs/qwen25_3b_gsm8k_lora_sft_full`
 
-### `benchmark/`
+Validation results in this full SFT run:
 
-This folder contains the current evaluation workflow.
+| System | Validation Accuracy |
+| --- | ---: |
+| Base Qwen2.5-3B-Instruct | 87.72% |
+| Full SFT adapter | 80.41% |
 
-- Teacher evaluation notebook: `benchmark/gsm8k_benchmark_teacher.ipynb`
-- Base model evaluation notebook: `benchmark/gsm8k_benchmark_qwen2_5_3b.ipynb`
-- Student evaluation notebook: `benchmark/gsm8k_student_distill.ipynb`
-- Existing result JSON files:
-  - `benchmark/gsm8k_benchmark_result/gsm8k_qwen3_5_results.json`
-  - `benchmark/gsm8k_benchmark_result/gsm8k_qwen2_5_3b_results.json`
-  - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Orig-Quant_results.json`
-  - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Orig_results.json`
-  - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Distill-Quant_results.json`
-  - `benchmark/gsm8k_benchmark_result/gsm8k_student_qwen2.5-3B-Orig-Orig_results.json`
+The SFT loss improves, but validation exact-match accuracy drops. This is an important caveat for interpreting later RL results.
 
-## Midterm Pipeline
+## RL Post-Training
 
-The current project pipeline is:
+RL code lives in `RL_GRPO_train/` and reuses utilities from `RL_common/`.
 
-```text
-prepare_data -> teacher_gen -> build_sft_dataset -> train_sft -> eval_teacher/base/sft -> summarize
-```
+Implemented algorithms:
 
-How this maps to the existing repository:
+- GRPO: group relative policy optimization baseline.
+- GSPO: sequence-level importance sampling variant.
+- DAPO: DAPO loss with truncated-completion masking, asymmetric clipping, and optional soft overlong punishment.
 
-- `prepare_data`
-  - currently embedded in the existing data-processing / notebook workflow
-- `teacher_gen`
-  - implemented in `SFT_data_generation/`
-- `build_sft_dataset`
-  - currently handled in the training notebook workflow
-- `train_sft`
-  - implemented in `train/train.ipynb`
-- `eval_teacher/base/sft`
-  - implemented in the notebooks under `benchmark/`
-- `summarize`
-  - current midterm summary table is written manually to `results/final_table.md` using existing benchmark JSON outputs
+All three runs use the same full SFT adapter as initialization and evaluate on the same SFT validation set and official GSM8K test set.
 
-## Thin Runner
-
-A thin orchestration script is provided at `scripts/run_all.sh`.
-
-It does not reimplement existing logic. Instead, it:
-
-- runs teacher generation if `DASHSCOPE_API_KEY` is available
-- points users to the existing notebook-based training workflow
-- points users to the existing notebook-based benchmark workflow
-- treats `results/final_table.md` as the current summary artifact
-
-Run it with:
+Run example:
 
 ```bash
-bash scripts/run_all.sh
+accelerate launch RL_GRPO_train/train_grpo.py \
+  --config RL_GRPO_train/configs/qwen25_3b_sft_grpo.yaml
 ```
+
+Final GSM8K test results:
+
+| System | Exact Match | Correct / Total | Avg Output Tokens |
+| --- | ---: | ---: | ---: |
+| GRPO | 79.38% | 1047/1319 | 93.14 |
+| GSPO | 80.52% | 1062/1319 | 93.43 |
+| DAPO | 79.30% | 1046/1319 | 90.08 |
+
+Current single-seed result: GSPO is the best RL post-training run and slightly exceeds the previous best SFT student result. More seeds are needed before treating this as a robust conclusion.
+
+## Benchmark Summary
+
+The combined result table is in:
+
+```text
+results/final_table.md
+```
+
+Important comparison points:
+
+- Teacher remains far stronger at `96.51%`.
+- Original midterm best SFT student: `80.21%`.
+- Current best RL post-training result: GSPO at `80.52%`.
+- GRPO and DAPO do not beat the older midterm best on GSM8K test.
 
 ## Environment
 
-The current dependency list is in `env/requirements.txt`.
-
-Recommended setup:
+Install the shared environment:
 
 ```bash
 python -m venv .venv
@@ -106,25 +129,15 @@ source .venv/bin/activate
 pip install -r env/requirements.txt
 ```
 
-## Midterm Result Table
+For vLLM-backed TRL generation, install the optional TRL vLLM extra in the target runtime:
 
-The current three-row comparison table is stored in:
+```bash
+pip install "trl[vllm]>=0.25.0"
+```
 
-- `results/final_table.md`
+## Notes
 
-Current metrics from existing benchmark outputs:
-
-| System | Accuracy |
-| --- | ---: |
-| Teacher | 96.51 |
-| Base Student | 79.61 |
-| SFT Student (Orig-Orig) | 80.21 |
-| SFT Student (Orig-Quant) | 77.48 |
-| SFT Student (Distill-Orig) | 78.62 |
-| SFT Student (Distill-Quant) | 78.70 |
-
-Additional note:
-
-- `Orig-Orig` is currently the best fine-tuned student checkpoint in the repo at `80.21%`.
-- `Orig-Quant` is `77.48%`, which is below the base model on this benchmark.
-- The two distilled student checkpoints are `78.62%` and `78.70%`, both also slightly below the base model on this benchmark.
+- Large LoRA adapter weights are tracked through Git LFS where present.
+- Do not commit `.DS_Store`, `__pycache__/`, or `*.pyc`.
+- Existing midterm artifacts are kept intentionally as baselines.
+- `benchmark/README.md` records the original benchmark environment and decoding settings.
