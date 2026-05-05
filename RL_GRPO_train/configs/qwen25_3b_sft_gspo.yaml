@@ -1,5 +1,5 @@
 run:
-  name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_train{train_dataset.limit}
+  name: qwen25_3b_instruct_sft_gspo_g{grpo.num_generations}_train{train_dataset.limit}
   output_root: RL_GRPO_train/outputs
 
 model:
@@ -75,9 +75,10 @@ grpo:
   gradient_checkpointing: true
   bf16: true
   report_to: "swanlab"
-  run_name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_improved
+  run_name: qwen25_3b_instruct_sft_gspo_g{grpo.num_generations}
   use_vllm: true
   vllm_mode: colocate
   loss_type: grpo
+  importance_sampling_level: sequence
   seed: 42
   data_seed: 42

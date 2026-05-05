@@ -1,5 +1,5 @@
 run:
-  name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_train{train_dataset.limit}
+  name: qwen25_3b_instruct_sft_dapo_g{grpo.num_generations}_train{train_dataset.limit}
   output_root: RL_GRPO_train/outputs
 
 model:
@@ -44,6 +44,10 @@ reward:
   length_penalty: -0.1
   min_completion_tokens: 20
   max_completion_tokens: 130
+  soft_overlong_punishment:
+    enabled: true
+    max_completion_len: 256
+    soft_punish_cache: 51
 
 eval:
   every_steps: 20
@@ -75,9 +79,12 @@ grpo:
   gradient_checkpointing: true
   bf16: true
   report_to: "swanlab"
-  run_name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_improved
+  run_name: qwen25_3b_instruct_sft_dapo_g{grpo.num_generations}
   use_vllm: true
   vllm_mode: colocate
-  loss_type: grpo
+  loss_type: dapo
+  mask_truncated_completions: true
+  epsilon: 0.2
+  epsilon_high: 0.28
   seed: 42
   data_seed: 42

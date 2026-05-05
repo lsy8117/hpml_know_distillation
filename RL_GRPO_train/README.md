@@ -1,75 +1,27 @@
 # RL_GRPO_train
 
-这个模块负责 TRL GRPO 训练。默认从当前 SFT LoRA adapter 继续训练，但不会修改原始 SFT checkpoint；训练输出写入固定目录 `outputs/{run.name}`。
+本目录用于在 GSM8K 数学推理任务上，从已有 SFT LoRA adapter 继续做 RL 训练，并对比 GRPO、GSPO、DAPO 三种策略优化方法。
 
-训练阶段默认验证集是 `SFT_train/data/gsm8k_sft_val.json`，它来自 GSM8K train split 的 held-out subset，和现有 SFT 验证口径一致。官方 GSM8K test 只在最终测试时手动选择性运行。
+当前实验设置基本一致：模型为 `Qwen/Qwen2.5-3B-Instruct`，初始 adapter 为 `SFT_train/outputs/qwen25_3b_gsm8k_lora_sft_full`，训练集来自 `SFT_train/data/gsm8k_sft_train.json`，训练中验证集为 `SFT_train/data/gsm8k_sft_val.json`，最终测试集为官方 GSM8K test。
 
-## 目录结构
+## 文件结构
 
-- `configs/qwen25_3b_sft_grpo.yaml`：默认 GRPO baseline 配置。
-- `train_grpo.py`：训练入口。
-- `outputs/{run.name}/final_adapter/`：当前 best adapter，只保留一份。
-- `outputs/{run.name}/best_eval_results.json`：best checkpoint 对应的 greedy eval准确率结果。
-- `outputs/{run.name}/resolved_config.yaml`：实际使用的配置。
+- `train_grpo.py`: 训练和评测入口。
+- `configs/qwen25_3b_sft_grpo.yaml`: GRPO 配置。
+- `configs/qwen25_3b_sft_gspo.yaml`: GSPO 配置。
+- `configs/qwen25_3b_sft_dapo.yaml`: DAPO 配置。
+- `outputs/*/final_adapter/`: 训练后保存的 LoRA adapter。
+- `outputs/*/best_eval_results.json`: 训练中验证集最优结果。
+- `outputs/*_final_test/final_test_eval_results.json`: 最终 GSM8K test 结果。
 
-`run.name` 支持从 YAML 参数自动填充，例如：
-
-```yaml
-run:
-  name: qwen25_3b_instruct_sft_grpo_g{grpo.num_generations}_train{train_dataset.limit}
-```
-
-如果 `train_dataset.limit` 留空，目录名里的这部分会解析为 `trainall`。
-
-## Colab 准备
-
-在 Colab Secret 中配置：
-
-- `HF_TOKEN`：如果模型或数据需要 Hugging Face token。
-- `SWANLAB_API_KEY`：SwanLab 训练记录。
-
-```python
-from google.colab import userdata
-import os
-
-for key in ["HF_TOKEN", "SWANLAB_API_KEY"]:
-    value = userdata.get(key)
-    if value:
-        os.environ[key] = value
-```
-
-安装依赖：
-
-```bash
-cd /content/project
-pip install -e RL_common
-pip install "trl>=0.25.0" swanlab accelerate
-```
-
-如果之后要开启 vLLM，再额外安装：
-
-```bash
-pip install "trl[vllm]>=0.25.0"
-```
-
-## 训练
-
-已经运行完 `RL_dryrun_rollout`， `mixed_rate` 结果不错，可以启动训练。
+## 运行方式
 
 ```bash
 accelerate launch RL_GRPO_train/train_grpo.py \
   --config RL_GRPO_train/configs/qwen25_3b_sft_grpo.yaml
 ```
 
-训练中自定义 greedy eval 默认每 10 step 跑一次，只评估 `sft_val`。如果 `sft_val/exact_match` 即验证集准确率变好，会覆盖保存：
-
-```text
-RL_GRPO_train/outputs/qwen25_3b_instruct_sft_grpo_g4_trainall/final_adapter
-```
-
-## 最终测试
-
-训练结束后，如需在官方 GSM8K test 上评估，可以手动运行：
+只跑最终测试：
 
 ```bash
 python RL_GRPO_train/train_grpo.py \
@@ -78,42 +30,34 @@ python RL_GRPO_train/train_grpo.py \
   --final-test
 ```
 
-更建议使用思谊的评测代码，确保评测口径的统一
+将配置文件换成 `qwen25_3b_sft_gspo.yaml` 或 `qwen25_3b_sft_dapo.yaml` 即可运行对应算法。
 
-## 更换模型或 adapter
+## 当前结果
 
-所有关键模型路径都在 YAML：
+训练均为 1000 steps，`num_generations=16`，`seed=42`，使用同一套 reward 和评测脚本。
 
-```yaml
-model:
-  base_model_name_or_path: Qwen/Qwen2.5-3B-Instruct
-  adapter_path: SFT_train/outputs/qwen25_3b_gsm8k_lora_sft_full
-  tokenizer_name_or_path: SFT_train/outputs/qwen25_3b_gsm8k_lora_sft_full
-  prompt_template: qwen_chat
-  system_prompt: ""
-  include_empty_system: false
-```
+### 验证集 best checkpoint
 
-`include_empty_system: false` 会让 Qwen chat template 自动插入默认 system prompt：
+| 算法 | best step | sft_val exact match | 正确数 |
+| --- | ---: | ---: | ---: |
+| GRPO | 960 | 89.7931% | 651 / 725 |
+| GSPO | 980 | 89.5172% | 649 / 725 |
+| DAPO | 860 | 90.0690% | 653 / 725 |
 
-```text
-You are Qwen, created by Alibaba Cloud. You are a helpful assistant.
-```
+### GSM8K final test
 
-这与 SFT 训练时的 `template: qwen` 输入格式是对齐的。这部分，可能要检查一下评测代码的输入构建是否也是如此的，不然评测与训练的输入不同，的结果会有bias
+| 算法 | exact match | 正确数 | reward mean | 平均输出 tokens | 长度惩罚率 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GRPO | 79.3783% | 1047 / 1319 | 0.8035 | 93.14 | 10.2350% |
+| GSPO | 80.5155% | 1062 / 1319 | 0.8135 | 93.43 | 11.5997% |
+| DAPO | 79.3025% | 1046 / 1319 | 0.8041 | 90.08 | 8.8704% |
 
-换成另一个 LoRA adapter：只改 `adapter_path`即可
+结论上，当前 single-seed 结果里 GSPO 的最终 test exact match 最高，比 GRPO 高约 1.14 个百分点；DAPO 在验证集 best metric 最高，同时输出更短、长度惩罚率最低，但最终 test accuracy 没有超过 GSPO。
 
-从无 adapter 的模型直接做 GRPO：把 `adapter_path` 留空，并按模型类型选择 prompt：
+## 算法差异
 
-```yaml
-prompt_template: qwen_chat
-```
+- GRPO: 标准 baseline，使用 group relative advantage，不需要额外 value model。
+- GSPO: 在 GRPO 基础上使用 sequence-level importance sampling，更直接约束整段 completion 的策略变化。
+- DAPO: 使用 `loss_type: dapo`、`mask_truncated_completions: true`、非对称 clip 和 soft overlong punishment，重点缓解长度偏置和过长输出问题。
 
-开启 vLLM 时，只改：
-
-```yaml
-grpo:
-  use_vllm: true
-  vllm_mode: colocate
-```
+当前结果是固定随机种子的单次对比，适合做阶段性判断；如果要写成更严谨的实验结论，建议每个算法补多 seed 的均值和标准差。

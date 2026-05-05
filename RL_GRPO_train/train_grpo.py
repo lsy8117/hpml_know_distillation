@@ -1,5 +1,5 @@
 from __future__ import annotations
-import torch
+
 import argparse
 import inspect
 import json
@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import torch
 from transformers import TrainerCallback
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,8 @@ CORE_GRPO_LOG_KEYS = {
     "rewards/answer_reward/std",
     "rewards/format_reward/mean",
     "rewards/penalty_reward/mean",
+    "rewards/soft_overlong_punishment/mean",
+    "rewards/soft_overlong_punishment/std",
     "answer_exact_match",
     "format_exact_rate",
     "parse_fail_rate",
@@ -186,19 +189,7 @@ def main() -> None:
     eval_examples = load_examples(config["eval_dataset"])
     train_dataset = build_trl_dataset(train_examples, prompt_cfg)
 
-    reward_funcs = [
-        make_answer_reward_func(
-            correct_reward=float(reward_cfg.get("answer_correct", 1.0)),
-            incorrect_reward=float(reward_cfg.get("answer_incorrect", 0.0)),
-        ),
-        make_format_reward_func(float(reward_cfg.get("format_reward", 0.2))),
-        make_penalty_reward_func(
-            parse_fail_penalty=float(reward_cfg.get("parse_fail_penalty", -0.1)),
-            length_penalty=float(reward_cfg.get("length_penalty", -0.05)),
-            min_completion_tokens=reward_cfg.get("min_completion_tokens"),
-            max_completion_tokens=reward_cfg.get("max_completion_tokens"),
-        ),
-    ]
+    reward_funcs = _build_reward_funcs(reward_cfg, config["grpo"])
 
     grpo_args = _build_grpo_config(GRPOConfig, config["grpo"], run_dir)
     callback = GreedyEvalAndBestSaveCallback(
@@ -245,6 +236,53 @@ def _build_grpo_config(grpo_config_cls: Any, raw_cfg: dict[str, Any], run_dir: P
             print(f"Ignoring unsupported GRPOConfig keys: {ignored}")
         cfg = {key: value for key, value in cfg.items() if key in accepted}
     return grpo_config_cls(**cfg)
+
+
+def _build_reward_funcs(reward_cfg: dict[str, Any], grpo_cfg: dict[str, Any]) -> list[Any]:
+    reward_funcs = [
+        make_answer_reward_func(
+            correct_reward=float(reward_cfg.get("answer_correct", 1.0)),
+            incorrect_reward=float(reward_cfg.get("answer_incorrect", 0.0)),
+        ),
+        make_format_reward_func(float(reward_cfg.get("format_reward", 0.2))),
+        make_penalty_reward_func(
+            parse_fail_penalty=float(reward_cfg.get("parse_fail_penalty", -0.1)),
+            length_penalty=float(reward_cfg.get("length_penalty", -0.05)),
+            min_completion_tokens=reward_cfg.get("min_completion_tokens"),
+            max_completion_tokens=reward_cfg.get("max_completion_tokens"),
+        ),
+    ]
+
+    soft_overlong_cfg = reward_cfg.get("soft_overlong_punishment")
+    if soft_overlong_cfg is None:
+        return reward_funcs
+    if not isinstance(soft_overlong_cfg, dict):
+        raise TypeError("reward.soft_overlong_punishment must be a mapping when set")
+    if not bool(soft_overlong_cfg.get("enabled", True)):
+        return reward_funcs
+
+    max_completion_len = int(
+        soft_overlong_cfg.get(
+            "max_completion_len",
+            grpo_cfg.get("max_completion_length"),
+        )
+    )
+    soft_punish_cache = int(soft_overlong_cfg["soft_punish_cache"])
+    if soft_punish_cache <= 0 or soft_punish_cache >= max_completion_len:
+        raise ValueError("soft_punish_cache must be positive and smaller than max_completion_len")
+
+    try:
+        from trl.rewards import get_soft_overlong_punishment
+    except ImportError as exc:
+        raise RuntimeError("The installed TRL package does not provide get_soft_overlong_punishment") from exc
+
+    soft_overlong_reward = get_soft_overlong_punishment(
+        max_completion_len=max_completion_len,
+        soft_punish_cache=soft_punish_cache,
+    )
+    soft_overlong_reward.__name__ = "soft_overlong_punishment"
+    reward_funcs.append(soft_overlong_reward)
+    return reward_funcs
 
 
 def _make_compact_grpo_trainer_class(base_cls: Any):
